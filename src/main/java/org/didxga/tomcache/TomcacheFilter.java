@@ -12,12 +12,20 @@ import java.util.Iterator;
 @SuppressWarnings("unused")
 public class TomcacheFilter implements Filter {
 
-    private MemoryCacheRepository cacheRepository = new MemoryCacheRepository();
+    private CacheRepository cacheRepository = new RedisCacheRepository();
     private StaleDataWatcher staleDataWatcher;
 
     @Override
     public void init(FilterConfig filterConfig) throws ServletException {
-        staleDataWatcher = new StaleDataWatcher(cacheRepository);
+        // TODO: StaleDataWatcher currently expects a MemoryCacheRepository.
+        // This will be addressed in a subsequent step to make it compatible with CacheRepository interface
+        // or specifically with RedisCacheRepository.
+        if (cacheRepository instanceof MemoryCacheRepository) {
+            staleDataWatcher = new StaleDataWatcher((MemoryCacheRepository) cacheRepository);
+        } else {
+            System.err.println("TomcacheFilter: StaleDataWatcher is not compatible with the current CacheRepository implementation (" + cacheRepository.getClass().getName() + ") and will not be initialized.");
+            staleDataWatcher = null;
+        }
     }
 
     @Override
@@ -27,10 +35,10 @@ public class TomcacheFilter implements Filter {
         String uri = Util.getURI(httpServletRequest);
         Key key = Key.generateKey(uri);
         Value value;
-        if(cacheRepository.cache.containsKey(key)) {
+        if(cacheRepository.has(key)) {
             //when hit cache, we get the cache from cache repository and break the filter chain by return directly
 
-            value =  cacheRepository.cache.get(key);
+            value =  cacheRepository.retrieve(key);
             if(value == null) {
                 //check to make sure cache is not removed upon the time we getting it from repository
                 return;
@@ -60,14 +68,20 @@ public class TomcacheFilter implements Filter {
                     value.headers.put(headerName, httpServletResponse.getHeader(headerName));
                 }
             }
-            cacheRepository.cache.put(key, value);
+            cacheRepository.store(key, value);
         }
 
     }
 
     @Override
     public void destroy() {
-        staleDataWatcher.shutdown();
-        cacheRepository.cache.clear();
+        if (staleDataWatcher != null) {
+            staleDataWatcher.shutdown();
+        }
+        if (cacheRepository instanceof RedisCacheRepository) {
+            ((RedisCacheRepository) cacheRepository).close();
+        }
+        // If cacheRepository could be other implementations,
+        // and a generic clear is needed, CacheRepository interface should define clear().
     }
 }
